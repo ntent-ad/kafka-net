@@ -48,9 +48,23 @@ namespace KafkaNet.Protocol
         /// </summary>
         public string Key { get; set; }
         /// <summary>
+        /// Topic name for the message.
+        /// </summary>
+        public string Topic { get; set; }
+        /// <summary>
         /// The message body contents.  Can contain compress message set.
         /// </summary>
-        public string Value { get; set; }
+        public string Value
+        {
+            get { return Encoding.Default.GetString(BinaryValue); }
+            set { BinaryValue = value.ToBytes(); }
+        }
+
+        /// <summary>
+        /// Convenience method to set the string Value from an array of bytes.
+        /// </summary>
+        /// <param name="value"></param>
+        public byte[] BinaryValue { get; set; }
 
         /// <summary>
         /// Encodes a collection of messages into one byte[].  Encoded in order of list.
@@ -104,7 +118,8 @@ namespace KafkaNet.Protocol
             body.Pack(new[] { message.MagicNumber },
                       new[] { message.Attribute },
                       message.Key.ToIntSizedBytes(),
-                      message.Value.ToIntSizedBytes());
+                      message.BinaryValue.Length.ToBytes(),
+                      message.BinaryValue);
 
             var crc = Crc32.ComputeHash(body.Payload());
             body.Prepend(crc);
@@ -139,7 +154,7 @@ namespace KafkaNet.Protocol
             switch (codec)
             {
                 case MessageCodec.CodecNone:
-                    message.Value = stream.ReadIntString();
+                    message.BinaryValue = stream.ReadIntPrefixedBytes();
                     yield return message;
                     break;
                 case MessageCodec.CodecGzip:

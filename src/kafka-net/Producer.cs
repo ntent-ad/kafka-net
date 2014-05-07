@@ -43,13 +43,12 @@ namespace KafkaNet
         /// <summary>
         /// Send a enumerable of message objects to a given topic.
         /// </summary>
-        /// <param name="topic">The name of the kafka topic to send the messages to.</param>
-        /// <param name="messages">The enumerable of messages that will be sent to the given topic.</param>
+        /// <param name="messages">The enumerable of messages that will be sent to the given topic. All messages *MUST* have a topic assigned to them.</param>
         /// <param name="acks">The required level of acknowlegment from the kafka server.  0=none, 1=writen to leader, 2+=writen to replicas, -1=writen to all replicas.</param>
         /// <param name="timeoutMS">Interal kafka timeout to wait for the requested level of ack to occur before returning.</param>
         /// <param name="codec">The codec to apply to the message collection.  Defaults to none.</param>
         /// <returns>List of ProduceResponses for each message sent or empty list if acks = 0.</returns>
-        public async Task<List<ProduceResponse>> SendMessageAsync(string topic, IEnumerable<Message> messages, Int16 acks = 1, int timeoutMS = 1000, MessageCodec codec = MessageCodec.CodecNone)
+        public async Task<List<ProduceResponse>> SendMultiTopicMessagesAsync(IEnumerable<Message> messages, Int16 acks = 1, int timeoutMS = 1000, MessageCodec codec = MessageCodec.CodecNone)
         {
             Interlocked.Increment(ref _currentAsyncQueue);
 
@@ -63,7 +62,7 @@ namespace KafkaNet
 
                 //group message by the server connection they will be sent to
                 var routeGroup = from message in messages
-                                 select new {Route = _router.SelectBrokerRoute(topic, message.Key), Message = message}
+                                 select new {Route = _router.SelectBrokerRoute(message.Topic, message.Key), Message = message}
                                  into routes
                                  group routes by routes.Route;
                 
@@ -97,6 +96,28 @@ namespace KafkaNet
             {
                 Interlocked.Decrement(ref _currentAsyncQueue);
             }
+        }
+
+        /// <summary>
+        /// Send a enumerable of message objects to a given topic.
+        /// </summary>
+        /// <param name="topic">The name of the kafka topic to send the messages to.</param>
+        /// <param name="messages">The enumerable of messages that will be sent to the given topic.</param>
+        /// <param name="acks">The required level of acknowlegment from the kafka server.  0=none, 1=writen to leader, 2+=writen to replicas, -1=writen to all replicas.</param>
+        /// <param name="timeoutMS">Interal kafka timeout to wait for the requested level of ack to occur before returning.</param>
+        /// <param name="codec">The codec to apply to the message collection.  Defaults to none.</param>
+        /// <returns>List of ProduceResponses for each message sent or empty list if acks = 0.</returns>
+        public Task<List<ProduceResponse>> SendMessageAsync(string topic, IEnumerable<Message> messages, Int16 acks = 1, int timeoutMS = 1000, MessageCodec codec = MessageCodec.CodecNone)
+        {
+            // with the addition of method SendMultiTopicMessagesAsync, 
+            // to keep things DRY all we have to do here is assign the topic to the message
+            var messageWithTopic = messages.Select(m =>
+                {
+                    m.Topic = topic;
+                    return m;
+                });
+
+            return SendMultiTopicMessagesAsync(messageWithTopic, acks, timeoutMS, codec);
         }
 
 
