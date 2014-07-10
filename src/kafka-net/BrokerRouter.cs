@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,11 +12,12 @@ namespace KafkaNet
     /// This class provides an abstraction from querying multiple Kafka servers for Metadata details and caching this data.
     /// 
     /// All metadata queries are cached lazily.  If metadata from a topic does not exist in cache it will be queried for using
-    /// the default brokers provided in the constructor.  Each Uri will be queried to get metadata information in tern until a
+    /// the default brokers provided in the constructor.  Each Uri will be queried to get metadata information in turn until a
     /// response is received.  It is recommended therefore to provide more than one Kafka Uri as this API will be able to to get
     /// metadata information even if one of the Kafka servers goes down.
     /// 
     /// TODO : there is currently no way to update the cache once it is in there in this class
+    /// method RefreshTopicMetadata updates the cache for missing topics
     /// </summary>
     public class BrokerRouter : IBrokerRouter
     {
@@ -75,9 +77,9 @@ namespace KafkaNet
 
             if (cachedTopic == null)
                 throw new InvalidTopicMetadataException(string.Format("The Metadata is invalid as it returned no data for the given topic:{0}", topic));
-            
+
             var partition = _kafkaOptions.PartitionSelector.Select(cachedTopic, key);
-         
+
             return GetCachedRoute(cachedTopic.Name, partition);
         }
 
@@ -97,14 +99,24 @@ namespace KafkaNet
             //update metadata for all missing topics
             if (topicSearchResult.Missing.Count > 0)
             {
+                IEnumerable<Topic> refreshedTopics;
+                
                 //lock here so we dont send duplicate queries for missing topics
                 lock (_threadLock)
                 {
                     //double check for missing topics and query
                     RefreshTopicMetadata(topicSearchResult.Missing.Where(x => _topicIndex.ContainsKey(x) == false).ToArray());
+
+                    refreshedTopics = topicSearchResult.Missing.Select(GetCachedTopic).Where(x => x != null);
+
+                    //Kafka topic will not be added to the _topicIndex cache if it was created on the first refresh
+                    if (refreshedTopics.Count() < topicSearchResult.Missing.Count())
+                    {
+                        //Retry the refresh for newly created kafka topics
+                        RefreshTopicMetadata(topicSearchResult.Missing.Where(x => _topicIndex.ContainsKey(x) == false).ToArray());
+                    }
                 }
 
-                var refreshedTopics = topicSearchResult.Missing.Select(GetCachedTopic).Where(x => x != null);
                 topicSearchResult.Topics.AddRange(refreshedTopics);
             }
 
@@ -146,11 +158,11 @@ namespace KafkaNet
         private TopicSearchResult SearchCacheForTopics(IEnumerable<string> topics)
         {
             var result = new TopicSearchResult();
-            
+
             foreach (var topic in topics)
             {
                 var cachedTopic = GetCachedTopic(topic);
-                
+
                 if (cachedTopic == null)
                     result.Missing.Add(topic);
                 else
@@ -250,7 +262,15 @@ namespace KafkaNet
             foreach (var topic in metadata.Topics)
             {
                 var localTopic = topic;
-                _topicIndex.AddOrUpdate(topic.Name, s => localTopic, (s, existing) => localTopic);
+                //If a Topic was just added to Kafka, the partition will register as 0. 
+                // Do not add key for this topic to force another refresh of the cache 
+                if (localTopic.Partitions.Count <= 0)
+                {
+                    if (_topicIndex.ContainsKey(topic.Name))
+                        _topicIndex.TryRemove(topic.Name, out localTopic);
+                }
+                else
+                    _topicIndex.AddOrUpdate(topic.Name, s => localTopic, (s, existing) => localTopic);
             }
         }
 
